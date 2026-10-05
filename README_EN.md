@@ -15,6 +15,9 @@ A native **Kotlin + Jetpack Compose** Android comic reader.
 
 - 📖 **Browse comics** — home (promote + latest), categories, weekly ranking, daily check-in,
   hot tags, keyword search, random recommendations
+- 🔎 **Better search** — besides keyword search: **search by author** (results grouped per author)
+  and **jump straight to a comic by its JM id**; cards show the author, the detail page links
+  authors / tags to a search, and results page in as you scroll
 - 📚 **Native reader** — vertical / horizontal paging, chapter switching, progress slider,
   automatic **image de-scrambling** (some album pages are served with reversed horizontal
   strips; this app restores them)
@@ -23,6 +26,8 @@ A native **Kotlin + Jetpack Compose** Android comic reader.
   de-scrambled JPEGs into `Downloads/JMReader/<albumId>/` on your device:
   visible in the Downloads folder, transferable via USB, readable by any gallery app,
   and playable in the built-in **offline reader** (no network needed)
+- 🕘 **Browsing history** — every album you open is remembered on the device (no account
+  needed, works offline), with per-item delete and clear-all
 - 🛡️ **Crash report on next launch** — if the app crashes, the stack trace is saved and shown
   on the next launch with a one-tap **copy log** button
 - 👤 **Member features** — login / register, favorites, viewing history, daily check-in, profile
@@ -46,6 +51,10 @@ gradlew.bat :app:assembleDebug
 ```
 
 Output: `app/build/outputs/apk/debug/app-debug.apk`
+
+Pushing a branch or opening a PR runs the same build on GitHub Actions and uploads the debug
+APK as the `jm-reader-debug-apk` artifact (see `.github/workflows/android.yml`). CI only
+produces debug builds; a release build still needs your own `jmreader.keystore`.
 
 The release build is signed with a local `jmreader.keystore` (see `app/build.gradle.kts`);
 generate your own keystore for distribution — the committed build script expects one.
