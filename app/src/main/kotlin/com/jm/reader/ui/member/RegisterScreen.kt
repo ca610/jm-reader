@@ -29,6 +29,7 @@ import com.jm.reader.data.repo.RepoResult
 import com.jm.reader.ui.LocalAppStrings
 import com.jm.reader.ui.LocalRepository
 import com.jm.reader.ui.components.AppTopBar
+import com.jm.reader.ui.nav.Routes
 import kotlinx.coroutines.launch
 
 @Composable
@@ -44,6 +45,8 @@ fun RegisterScreen(navController: NavHostController) {
     var loading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf(false) }
+    // Mirrors the API's own rule (it answers "電子郵件不是有效的電子郵件地址!" for bad input).
+    val emailPattern = remember { Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$") }
 
     Scaffold(topBar = { AppTopBar(s.register, onBack = { navController.popBackStack() }) }) { padding ->
         Column(
@@ -96,32 +99,57 @@ fun RegisterScreen(navController: NavHostController) {
                 )
             }
 
-            Button(
-                onClick = {
-                    if (username.isBlank() || email.isBlank() || password.isBlank()) { message = s.fillComplete; return@Button }
-                    if (password != passwordConfirm) { message = s.passwordMismatch; return@Button }
-                    loading = true
-                    message = null
-                    scope.launch {
-                        when (val r = repo.register(username, password, passwordConfirm, email, gender)) {
-                            is RepoResult.Ok -> {
-                                message = s.registerSuccess
-                                success = true
-                                loading = false
-                            }
-                            is RepoResult.Err -> {
-                                message = r.message
-                                success = false
-                                loading = false
+            if (success) {
+                Button(
+                    onClick = {
+                        // Back to login with the new account name already filled in.
+                        navController.navigate(Routes.login(username.trim())) {
+                            popUpTo(Routes.MAIN)
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                ) { Text("${s.login} →") }
+            } else {
+                Button(
+                    onClick = {
+                        val name = username.trim()
+                        val mail = email.trim()
+                        // The server enforces these too; checking here keeps the errors understandable.
+                        val problem = when {
+                            name.isBlank() || mail.isBlank() || password.isBlank() -> s.fillComplete
+                            !emailPattern.matches(mail) -> s.invalidEmail
+                            password.length < 8 -> s.passwordTooShort
+                            password != passwordConfirm -> s.passwordMismatch
+                            else -> null
+                        }
+                        if (problem != null) {
+                            success = false
+                            message = problem
+                        } else {
+                            loading = true
+                            message = null
+                            scope.launch {
+                                when (val r = repo.register(name, password, passwordConfirm, mail, gender)) {
+                                    is RepoResult.Ok -> {
+                                        success = true
+                                        message = s.registerSuccess
+                                        loading = false
+                                    }
+                                    is RepoResult.Err -> {
+                                        success = false
+                                        message = r.message
+                                        loading = false
+                                    }
+                                }
                             }
                         }
-                    }
-                },
-                enabled = !loading,
-                modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
-            ) {
-                if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                else Text(s.register)
+                    },
+                    enabled = !loading,
+                    modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                ) {
+                    if (loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    else Text(s.register)
+                }
             }
         }
     }

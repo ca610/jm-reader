@@ -46,6 +46,7 @@ fun JMRoot(app: JMApplication) {
         LocalSession provides app.session,
         LocalLanguageManager provides app.languageManager,
         LocalDownloadManager provides app.downloadManager,
+        LocalHistoryManager provides app.historyManager,
         LocalAppStrings provides strings,
     ) {
         val navController = rememberNavController()
@@ -64,7 +65,19 @@ fun AppNavHost(navController: NavHostController) {
         composable(Routes.SPLASH) { SplashScreen(navController) }
         composable(Routes.MAIN) { MainScreen(navController) }
 
-        composable(Routes.SEARCH) { SearchScreen(navController) }
+        composable(
+            Routes.SEARCH,
+            arguments = listOf(
+                navArgument("mode") { type = NavType.StringType; defaultValue = "work" },
+                navArgument("q") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { entry ->
+            SearchScreen(
+                navController,
+                initialMode = entry.arguments?.getString("mode").orEmpty(),
+                initialQuery = entry.arguments?.getString("q").orEmpty(),
+            )
+        }
         composable(Routes.CATEGORIES) { CategoriesScreen(navController, Modifier) }
         composable(Routes.WEEK) { WeekScreen(navController) }
         composable(Routes.DAILY) { DailyScreen(navController) }
@@ -129,7 +142,12 @@ fun AppNavHost(navController: NavHostController) {
             arguments = listOf(navArgument("id") { type = NavType.StringType }),
         ) { entry -> MovieDetailScreen(navController, entry.arguments?.getString("id").orEmpty()) }
 
-        composable(Routes.LOGIN) { LoginScreen(navController) }
+        composable(
+            Routes.LOGIN,
+            arguments = listOf(navArgument("username") { type = NavType.StringType; defaultValue = "" }),
+        ) { entry ->
+            LoginScreen(navController, initialUsername = entry.arguments?.getString("username").orEmpty())
+        }
         composable(Routes.REGISTER) { RegisterScreen(navController) }
     }
 }

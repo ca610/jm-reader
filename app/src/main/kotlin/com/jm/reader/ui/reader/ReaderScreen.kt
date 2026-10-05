@@ -96,7 +96,7 @@ fun ReaderScreen(navController: NavHostController, albumId: String, readId: Stri
         when (val r = repo.comicRead(chapterId)) {
             is RepoResult.Ok -> {
                 read = r.data
-                session.jwtToken?.let { repo.addWatch(chapterId) }
+                if (session.isLoggedIn) repo.addWatch(chapterId)
             }
             is RepoResult.Err -> error = r.message
         }

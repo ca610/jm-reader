@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.jm.reader.data.repo.AppRepository
 import com.jm.reader.data.repo.RepoResult
 import com.jm.reader.ui.LocalAppStrings
 import com.jm.reader.ui.LocalRepository
@@ -29,11 +30,11 @@ import com.jm.reader.ui.nav.Routes
 import kotlinx.coroutines.launch
 
 @Composable
-fun LoginScreen(navController: NavHostController) {
+fun LoginScreen(navController: NavHostController, initialUsername: String = "") {
     val repo = LocalRepository.current
     val s = LocalAppStrings.current
     val scope = rememberCoroutineScope()
-    var username by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf(initialUsername) }
     var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -64,9 +65,16 @@ fun LoginScreen(navController: NavHostController) {
                     loading = true
                     error = null
                     scope.launch {
-                        when (val r = repo.login(username, password)) {
-                            is RepoResult.Ok -> navController.popBackStack()
-                            is RepoResult.Err -> { error = r.message; loading = false }
+                        // Trim the account name: a pasted trailing space is rejected by the API.
+                        when (val r = repo.login(username.trim(), password)) {
+                            is RepoResult.Ok -> {
+                                loading = false
+                                navController.popBackStack()
+                            }
+                            is RepoResult.Err -> {
+                                error = if (r.message == AppRepository.ERR_BAD_CREDENTIALS) s.loginFailed else r.message
+                                loading = false
+                            }
                         }
                     }
                 },

@@ -3,6 +3,9 @@ package com.jm.reader.data.session
 import android.content.Context
 import android.content.SharedPreferences
 import com.jm.reader.ui.strings.UiLanguage
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 
 /**
@@ -47,13 +50,25 @@ class SessionManager(context: Context) {
     val avsSession: String?
         get() = memberJson?.let { runCatching { JSONObject(it).optString("s") }.getOrNull() }
 
+    /**
+     * The app API does not hand out a bearer token: `/login` returns the member payload whose
+     * `s` field is then sent back as the `AVS` cookie, and that cookie is what authenticates
+     * every later request. So a session counts as logged in when we hold that payload, not
+     * when a `jwttoken` happens to be present (the mobile API never sends one).
+     */
     val isLoggedIn: Boolean
-        get() = !jwtToken.isNullOrBlank()
+        get() = memberJson?.isNotBlank() == true && (!avsSession.isNullOrBlank() || !jwtToken.isNullOrBlank())
+
+    private val _loggedIn = MutableStateFlow(isLoggedIn)
+
+    /** Emits on every login / logout so screens refresh without being recreated. */
+    val loggedInFlow: StateFlow<Boolean> = _loggedIn.asStateFlow()
 
     fun saveAuth(token: String, memberData: JSONObject) {
         jwtToken = token
         memberJson = memberData.toString()
         prefs.edit().putLong(KEY_AUTH_EXPIRY, System.currentTimeMillis() + 60 * 60 * 1000L).apply()
+        _loggedIn.value = isLoggedIn
     }
 
     fun clearAuth() {
@@ -62,6 +77,7 @@ class SessionManager(context: Context) {
             .remove(KEY_MEMBER)
             .remove(KEY_AUTH_EXPIRY)
             .apply()
+        _loggedIn.value = false
     }
 
     /** Clears auth when the 1-hour web-app expiry has passed. */

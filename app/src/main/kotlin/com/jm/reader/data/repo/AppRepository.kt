@@ -36,6 +36,14 @@ sealed class RepoResult<out T> {
     }
 }
 
+/** One page of `search` results: the comics plus the API-reported total and the search scope. */
+data class SearchPage(
+    val query: String = "",
+    val searchType: String = "site",
+    val total: Int = 0,
+    val items: List<ComicListItem> = emptyList(),
+)
+
 /**
  * Thin wrapper over [ApiClient] exposing typed methods for every feature used by the app.
  * Ads, coin purchases and recharge flows are intentionally NOT exposed here.
@@ -45,6 +53,14 @@ class AppRepository(
     private val api: ApiClient,
     private val hostManager: HostManager,
 ) {
+    companion object {
+        /**
+         * Returned by [login] when the server rejects the username / password pair. Screens map it
+         * to a localised message instead of surfacing the raw API failure.
+         */
+        const val ERR_BAD_CREDENTIALS = "jm.err.bad_credentials"
+    }
+
     // -----------------------------------------------------------------------
     // Bootstrap
     // -----------------------------------------------------------------------
@@ -135,16 +151,40 @@ class AppRepository(
     // Search / tags / categories
     // -----------------------------------------------------------------------
 
-    /** GET /search - keyword search. Pass filter JSON string for advanced filter. */
-    suspend fun search(keyword: String, filter: String? = null, page: Int = 1): RepoResult<List<ComicListItem>> {
+    /**
+     * GET /search - keyword search.
+     *
+     * @param searchType scope of the search: "site" (default, everything), "work" (titles only)
+     *        or "author" (author names only). The API echoes the scope it actually used.
+     * @param filter optional JSON string for the advanced filter.
+     */
+    suspend fun search(
+        keyword: String,
+        filter: String? = null,
+        page: Int = 1,
+        searchType: String? = null,
+    ): RepoResult<List<ComicListItem>> = searchPage(keyword, searchType, page, filter).map { it.items }
+
+    /**
+     * GET /search - like [search] but keeps the API-reported `total` (and echoed `search_type`)
+     * so the UI can show result counts and know when paging is exhausted.
+     */
+    suspend fun searchPage(
+        keyword: String,
+        searchType: String? = null,
+        page: Int = 1,
+        filter: String? = null,
+    ): RepoResult<SearchPage> {
         val params = mutableMapOf<String, Any>("search_query" to keyword, "page" to page)
         if (!filter.isNullOrBlank()) params["filter"] = filter
+        if (!searchType.isNullOrBlank()) params["search_type"] = searchType
         return api.get("search", params).toRepoList { o, arr ->
-            val list = o?.obj("data") ?: o
-            if (list != null) list.objList("content").let { c ->
-                if (c.isNotEmpty()) c.map { ComicListItem.fromJson(it) }.distinctBy { it.id }
-                else list.objList("list").map { ComicListItem.fromJson(it) }.distinctBy { it.id }
-            } else listFromObjOrArr(o, arr)
+            SearchPage(
+                query = o?.str("search_query")?.ifBlank { keyword } ?: keyword,
+                searchType = o?.str("search_type").orEmpty().ifBlank { searchType ?: "site" },
+                total = o?.long("total")?.toInt() ?: 0,
+                items = parseComicList(o, arr),
+            )
         }
     }
 
@@ -201,21 +241,30 @@ class AppRepository(
     // Auth / member
     // -----------------------------------------------------------------------
 
-    /** POST /login {username, password} */
+    /**
+     * POST /login {username, password}
+     *
+     * Rejected credentials come back as HTTP 401 with an empty payload; a successful login
+     * returns the member payload. The mobile API never sends a `jwttoken` - the member's `s`
+     * field becomes the AVS cookie that authenticates every later request, so that payload is
+     * what makes [SessionManager.isLoggedIn] true.
+     */
     suspend fun login(username: String, password: String): RepoResult<Member> {
         val r = api.post("login", mapOf("username" to username, "password" to password))
         return when (r) {
             is ApiClient.Result.Success -> {
                 val data = r.obj
-                if (r.code == 200 && data != null) {
-                    val token = data.str("jwttoken")
-                    session.saveAuth(token, data)
+                val memberPayload = data != null &&
+                    (data.str("s").isNotBlank() || data.str("uid").isNotBlank() || data.str("username").isNotBlank())
+                if (r.code == 200 && data != null && memberPayload) {
+                    session.saveAuth(data.str("jwttoken"), data)
                     RepoResult.Ok(Member.fromJson(data))
                 } else {
-                    RepoResult.Err(data?.str("msg") ?: "登入失敗 (${r.code})")
+                    RepoResult.Err(data?.str("msg").orEmpty().ifBlank { ERR_BAD_CREDENTIALS })
                 }
             }
-            is ApiClient.Result.ApiFailure -> RepoResult.Err("登入失敗 (${r.code})")
+            is ApiClient.Result.ApiFailure ->
+                RepoResult.Err(if (r.code == 401) ERR_BAD_CREDENTIALS else "登入失敗 (${r.code})")
             is ApiClient.Result.NetworkFailure -> RepoResult.Err(r.message)
         }
     }
@@ -238,7 +287,34 @@ class AppRepository(
                 "gender" to gender,
             ),
         )
-        return r.toRepoObj()
+        return when (r) {
+            is ApiClient.Result.Success -> {
+                val failure = registrationFailure(r.obj)
+                if (r.code == 200 && failure == null) RepoResult.Ok(r.obj ?: JSONObject())
+                else RepoResult.Err(failure ?: "註冊失敗 (${r.code})")
+            }
+            is ApiClient.Result.ApiFailure -> RepoResult.Err("註冊失敗 (${r.code})")
+            is ApiClient.Result.NetworkFailure -> RepoResult.Err(r.message)
+        }
+    }
+
+    /**
+     * `/register` answers HTTP 200 even when it refuses the submission, reporting
+     * `{ "status": "fail", "msg": "...", "errors": ["..."] }`. Returns the reported problem,
+     * or null when the registration went through.
+     */
+    private fun registrationFailure(obj: JSONObject?): String? {
+        val o = obj ?: return null
+        val errors = o.optJSONArray("errors")
+        val status = o.str("status").lowercase()
+        val failed = (errors?.length() ?: 0) > 0 ||
+            status == "fail" || status == "error" || status == "false"
+        if (!failed) return null
+        return (0 until (errors?.length() ?: 0))
+            .mapNotNull { errors?.optString(it)?.takeIf { m -> m.isNotBlank() } }
+            .joinToString("\n")
+            .ifBlank { o.str("msg") }
+            .ifBlank { "註冊失敗" }
     }
 
     /** POST /forgot {email} */
@@ -500,6 +576,19 @@ class AppRepository(
             }
         }
         return emptyList()
+    }
+
+    /** Reads a comic list from either a bare JSON array or a `{ content | list }` wrapper. */
+    private fun parseComicList(o: JSONObject?, arr: JSONArray?): List<ComicListItem> {
+        val list = o?.obj("data") ?: o
+        if (list != null) {
+            val content = list.objList("content")
+            if (content.isNotEmpty()) return content.map { ComicListItem.fromJson(it) }.distinctBy { it.id }
+            val rows = list.objList("list")
+            if (rows.isNotEmpty()) return rows.map { ComicListItem.fromJson(it) }.distinctBy { it.id }
+            return emptyList()
+        }
+        return listFromObjOrArr(o, arr)
     }
 
     /** Extracts a JSON array of objects from the response for non-comic sections. */

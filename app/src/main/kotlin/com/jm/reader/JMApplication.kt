@@ -3,6 +3,7 @@ package com.jm.reader
 import android.app.Application
 import android.content.Context
 import com.jm.reader.data.download.DownloadManager
+import com.jm.reader.data.history.HistoryManager
 import com.jm.reader.data.net.ApiClient
 import com.jm.reader.data.net.HostManager
 import com.jm.reader.data.repo.AppRepository
@@ -24,6 +25,8 @@ class JMApplication : Application() {
         private set
     lateinit var downloadManager: DownloadManager
         private set
+    lateinit var historyManager: HistoryManager
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -41,6 +44,7 @@ class JMApplication : Application() {
         apiClient = ApiClient(session, http)
         repository = AppRepository(session, apiClient, hostManager)
         downloadManager = DownloadManager(this, repository)
+        historyManager = HistoryManager(this)
     }
 
     companion object {

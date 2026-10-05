@@ -110,11 +110,13 @@ class ApiClient(
         val headers = Headers.Builder()
             .add("Tokenparam", tokenParam)
             .add("Token", token)
-            .add("Authorization", session.jwtToken?.let { "Bearer $it" } ?: "")
-            .add("Cookie", session.avsSession?.let { "AVS=$it" } ?: "")
-            .build()
+        // Only send credentials we actually hold. The app API authenticates with the AVS cookie
+        // (the member payload's `s` field), so an empty Authorization header is never useful.
+        session.jwtToken?.takeIf { it.isNotBlank() }?.let { headers.add("Authorization", "Bearer $it") }
+        session.avsSession?.takeIf { it.isNotBlank() }?.let { headers.add("Cookie", "AVS=$it") }
+        val requestHeaders = headers.build()
 
-        val builder = Request.Builder().url(url).headers(headers)
+        val builder = Request.Builder().url(url).headers(requestHeaders)
         if (method == "POST") {
             val fb = FormBody.Builder()
             params.filter { (_, v) -> v != null }.forEach { (k, v) -> fb.add(k, v.toString()) }

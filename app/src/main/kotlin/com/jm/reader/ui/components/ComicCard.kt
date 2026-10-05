@@ -31,6 +31,8 @@ fun ComicCard(
     repo: AppRepository,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Show the author under the title (used by the search grids). */
+    showAuthor: Boolean = false,
 ) {
     Column(
         modifier = modifier
@@ -81,5 +83,17 @@ fun ComicCard(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
         )
+        if (showAuthor) {
+            item.author?.takeIf { it.isNotBlank() }?.let { author ->
+                Text(
+                    text = author,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp, start = 2.dp, end = 2.dp),
+                )
+            }
+        }
     }
 }

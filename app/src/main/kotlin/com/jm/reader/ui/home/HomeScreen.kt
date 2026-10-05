@@ -142,7 +142,7 @@ fun HomeScreen(navController: NavHostController, modifier: Modifier = Modifier) 
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                         .clip(RoundedCornerShape(24.dp))
-                        .clickable { navController.navigate(Routes.SEARCH) }
+                        .clickable { navController.navigate(Routes.search()) }
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

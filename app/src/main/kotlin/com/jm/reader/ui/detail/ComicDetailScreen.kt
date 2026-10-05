@@ -10,6 +10,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -66,6 +68,7 @@ import com.jm.reader.data.repo.AppRepository
 import com.jm.reader.data.repo.RepoResult
 import com.jm.reader.ui.LocalAppStrings
 import com.jm.reader.ui.LocalDownloadManager
+import com.jm.reader.ui.LocalHistoryManager
 import com.jm.reader.ui.LocalRepository
 import com.jm.reader.ui.LocalSession
 import com.jm.reader.ui.components.AppTopBar
@@ -82,10 +85,12 @@ private data class DetailUiState(
     val error: String? = null,
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ComicDetailScreen(navController: NavHostController, id: String) {
     val repo = LocalRepository.current
     val session = LocalSession.current
+    val history = LocalHistoryManager.current
     val s = LocalAppStrings.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -94,7 +99,13 @@ fun ComicDetailScreen(navController: NavHostController, id: String) {
     suspend fun load() {
         state = DetailUiState(loading = true)
         state = when (val r = repo.getAlbum(id)) {
-            is RepoResult.Ok -> DetailUiState(detail = r.data, loading = false)
+            is RepoResult.Ok -> {
+                // Opening an album is what the local history tab records.
+                if (r.data.id.isNotBlank()) {
+                    history.record(r.data.id, r.data.name, r.data.authors.firstOrNull(), r.data.addtime)
+                }
+                DetailUiState(detail = r.data, loading = false)
+            }
             is RepoResult.Err -> DetailUiState(error = r.message, loading = false)
         }
     }
@@ -176,7 +187,7 @@ fun ComicDetailScreen(navController: NavHostController, id: String) {
                                         if (detail.isPaid) {
                                             scope.launch { snackbar.showSnackbar(s.paidContentNotice) }
                                         } else {
-                                            if (session.jwtToken != null) scope.launch { repo.addWatch(readId) }
+                                            if (session.isLoggedIn) scope.launch { repo.addWatch(readId) }
                                             navController.navigate(Routes.reader(detail.id, readId))
                                         }
                                     },
@@ -185,9 +196,9 @@ fun ComicDetailScreen(navController: NavHostController, id: String) {
 
                                 FavoriteButton(
                                     isFavorite = detail.isFavorite,
-                                    loggedIn = !session.jwtToken.isNullOrBlank(),
+                                    loggedIn = session.isLoggedIn,
                                     onClick = {
-                                        if (session.jwtToken.isNullOrBlank()) {
+                                        if (!session.isLoggedIn) {
                                             scope.launch { snackbar.showSnackbar(s.loginFirst) }
                                         } else {
                                             scope.launch {
@@ -222,22 +233,53 @@ fun ComicDetailScreen(navController: NavHostController, id: String) {
 
                         if (detail.authors.isNotEmpty()) {
                             item {
-                                Text(
-                                    s.authorLabel + detail.authors.joinToString(" / "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
-                                )
+                                // Tapping an author jumps straight to an author search for them.
+                                FlowRow(
+                                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        s.authorLabel,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    detail.authors.forEach { author ->
+                                        Text(
+                                            author,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(horizontal = 2.dp).clickable {
+                                                navController.navigate(Routes.search(mode = "author", q = author))
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                         if (detail.tags.isNotEmpty()) {
                             item {
-                                Text(
-                                    s.tagLabel + detail.tags.joinToString("、"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
-                                )
+                                FlowRow(
+                                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        s.tagLabel,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    detail.tags.forEach { tag ->
+                                        Text(
+                                            "#$tag",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.padding(horizontal = 2.dp).clickable {
+                                                navController.navigate(Routes.search(mode = "work", q = tag))
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                         item {
@@ -278,7 +320,7 @@ fun ComicDetailScreen(navController: NavHostController, id: String) {
                             items(chapters, key = { it.id }) { chapter ->
                                 ChapterRow(chapter, readId, repo, s, onClick = {
                                     if (!detail.isPaid) {
-                                        if (session.jwtToken != null) scope.launch { repo.addWatch(chapter.id) }
+                                        if (session.isLoggedIn) scope.launch { repo.addWatch(chapter.id) }
                                         navController.navigate(Routes.reader(detail.id, chapter.id))
                                     } else {
                                         scope.launch { snackbar.showSnackbar(s.paidContentNotice) }

@@ -1,14 +1,17 @@
 package com.jm.reader.ui.library
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
@@ -33,30 +36,46 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.jm.reader.data.download.DownloadManager
+import com.jm.reader.data.history.HistoryManager
 import com.jm.reader.data.model.ComicListItem
+import com.jm.reader.data.repo.AppRepository
 import com.jm.reader.data.repo.RepoResult
 import com.jm.reader.ui.LocalAppStrings
 import com.jm.reader.ui.LocalDownloadManager
+import com.jm.reader.ui.LocalHistoryManager
 import com.jm.reader.ui.LocalRepository
 import com.jm.reader.ui.LocalSession
 import com.jm.reader.ui.components.ComicGrid
 import com.jm.reader.ui.components.EmptyView
 import com.jm.reader.ui.components.LoadingView
 import com.jm.reader.ui.nav.Routes
+import com.jm.reader.ui.strings.AppStrings
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun LibraryScreen(navController: NavHostController, modifier: Modifier = Modifier) {
     val repo = LocalRepository.current
     val session = LocalSession.current
     val downloadManager = LocalDownloadManager.current
+    val history = LocalHistoryManager.current
     val s = LocalAppStrings.current
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // Observed instead of read once: the login state changes while this screen is on screen.
+    val loggedIn by session.loggedInFlow.collectAsState()
 
     Scaffold(
         topBar = {
@@ -75,17 +94,13 @@ fun LibraryScreen(navController: NavHostController, modifier: Modifier = Modifie
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            if (tab < 2 && session.jwtToken.isNullOrBlank()) {
-                Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center) {
-                    Text(s.libraryLoginRequired, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = { navController.navigate(Routes.LOGIN) }, modifier = Modifier.padding(top = 12.dp)) {
-                        Text(s.goLogin)
-                    }
-                }
+            // Favorites are server-side and need an account; history and downloads are local.
+            if (tab == 0 && !loggedIn) {
+                LoginRequired(navController, s)
             } else {
                 when (tab) {
                     0 -> FavoritesList(navController, repo, s)
-                    1 -> HistoryList(navController, repo, s)
+                    1 -> HistoryList(navController, repo, history, s)
                     2 -> DownloadsList(navController, downloadManager, s, scope)
                 }
             }
@@ -94,10 +109,24 @@ fun LibraryScreen(navController: NavHostController, modifier: Modifier = Modifie
 }
 
 @Composable
+private fun LoginRequired(navController: NavHostController, s: AppStrings) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(s.libraryLoginRequired, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Button(onClick = { navController.navigate(Routes.login()) }, modifier = Modifier.padding(top = 12.dp)) {
+            Text(s.goLogin)
+        }
+    }
+}
+
+@Composable
 private fun FavoritesList(
     navController: NavHostController,
-    repo: com.jm.reader.data.repo.AppRepository,
-    s: com.jm.reader.ui.strings.AppStrings,
+    repo: AppRepository,
+    s: AppStrings,
 ) {
     var items by remember { mutableStateOf<List<ComicListItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -128,52 +157,117 @@ private fun FavoritesList(
     }
 }
 
+/** Local browsing history - newest first, works offline and without an account. */
 @Composable
 private fun HistoryList(
     navController: NavHostController,
-    repo: com.jm.reader.data.repo.AppRepository,
-    s: com.jm.reader.ui.strings.AppStrings,
+    repo: AppRepository,
+    history: HistoryManager,
+    s: AppStrings,
 ) {
-    var items by remember { mutableStateOf<List<ComicListItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var reload by remember { mutableStateOf(0) }
-
-    LaunchedEffect(reload) {
-        loading = true
-        when (val r = repo.watchList(1)) {
-            is RepoResult.Ok -> {
-                items = r.data.optJSONArray("list")?.let { ja ->
-                    (0 until ja.length()).mapNotNull { ja.optJSONObject(it)?.let { ComicListItem.fromJson(it) } }
-                } ?: emptyList()
-                error = null
-            }
-            is RepoResult.Err -> error = r.message
-        }
-        loading = false
-    }
+    val entries by history.entries.collectAsState()
+    var confirmClear by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
-        when {
-            loading -> LoadingView()
-            error != null -> EmptyView(error!!, Modifier.fillMaxSize())
-            items.isEmpty() -> EmptyView(s.emptyHistory, Modifier.fillMaxSize())
-            else -> ComicGrid(
-                items = items,
-                repo = repo,
-                onItemClick = { navController.navigate(Routes.comicDetail(it.id)) },
-                modifier = Modifier.fillMaxSize(),
+        if (entries.isEmpty()) {
+            EmptyView(s.emptyHistory, Modifier.fillMaxSize())
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        s.historyCountFmt.format(entries.size),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { confirmClear = true }) { Text(s.historyClear) }
+                }
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(entries, key = { it.albumId }) { entry ->
+                        HistoryRow(
+                            entry = entry,
+                            repo = repo,
+                            s = s,
+                            onClick = { navController.navigate(Routes.comicDetail(entry.albumId)) },
+                            onDelete = { history.remove(entry.albumId) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text(s.historyClear) },
+            text = { Text(s.historyClearConfirm) },
+            confirmButton = {
+                TextButton(onClick = { history.clear(); confirmClear = false }) { Text(s.confirm) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text(s.cancel) }
+            },
+        )
+    }
+}
+
+@Composable
+private fun HistoryRow(
+    entry: HistoryManager.Entry,
+    repo: AppRepository,
+    s: AppStrings,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(repo.comicCover(entry.albumId, entry.updateAt))
+                .crossfade(true)
+                .build(),
+            contentDescription = entry.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(52.dp, 70.dp).clip(RoundedCornerShape(6.dp)),
+        )
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(entry.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            entry.author?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                formatViewedAt(entry.viewedAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        IconButton(onClick = onDelete) {
+            Icon(Icons.Filled.Delete, contentDescription = s.delete, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
+
+private fun formatViewedAt(millis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
 
 @Composable
 private fun DownloadsList(
     navController: NavHostController,
     downloadManager: DownloadManager,
-    s: com.jm.reader.ui.strings.AppStrings,
-    scope: kotlinx.coroutines.CoroutineScope,
+    s: AppStrings,
+    scope: CoroutineScope,
 ) {
     val albums by downloadManager.albums.collectAsState()
     val downloading by downloadManager.downloading.collectAsState()
@@ -183,7 +277,7 @@ private fun DownloadsList(
         if (albums.isEmpty()) {
             EmptyView(s.emptyDownloads, Modifier.fillMaxSize())
         } else {
-            androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize()) {
                 items(albums.sortedByDescending { it.timestamp }, key = { it.albumId }) { album ->
                     val prog = downloading[album.albumId]
                     Row(
